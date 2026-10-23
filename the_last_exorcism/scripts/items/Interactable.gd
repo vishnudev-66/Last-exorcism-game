@@ -1,6 +1,7 @@
-extends Node
+extends Node3D
 class_name Interactable
 ## Base class for anything the player can interact with (E key).
+## Node3D so subclasses (doors, pickups, ritual stations) own world position.
 ## Subclasses override `interact()`. The HUD reads `prompt_text` each frame to
 ## show "Press E ..." prompts when the player's raycast hovers this node.
 

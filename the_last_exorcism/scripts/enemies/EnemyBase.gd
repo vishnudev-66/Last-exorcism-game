@@ -133,7 +133,7 @@ func show_feedback(msg: String) -> void:
 
 # ---- Movement ------------------------------------------------------------------
 func _generic_navigation_step() -> void:
-	var goal := _current_goal()
+	var goal: Vector3 = _current_goal()
 	if goal == null:
 		return
 	nav_agent.target_position = goal
@@ -153,31 +153,35 @@ func _generic_navigation_step() -> void:
 		velocity.x = dir.x * spd
 		velocity.z = dir.z * spd
 		look_at(global_position + Vector3(dir.x, 0, dir.z) * 10.0 + Vector3.UP * global_position.y, Vector3.UP)
-	if not nav_agent.is_on_navigation_floor():
+	if nav_agent != null and not nav_agent.is_on_navigation_mesh():
 		velocity.y -= 18.0
 	move_and_slide()
 
 
-func _current_goal() -> Variant:
+func _current_goal() -> Vector3:
 	match state:
 		State.PATROL:
 			return _next_waypoint()
 		State.INVESTIGATE:
-			return _last_known_pos if _state_t < 5.0 else null
+			return _last_known_pos if _state_t < 5.0 else Vector3.ZERO
 		State.CHASE:
-			return _target.global_position if _target else null
+			return _target.global_position if _target != null else Vector3.ZERO
 		State.SEARCHING:
 			return _search_point()
 		_:
-			return null
+			return Vector3.ZERO
 
 
 func _next_waypoint() -> Vector3:
-	if patrol_path == null or patrol_path.curve.point_count == 0:
+	if patrol_path == null or patrol_path.curve == null or patrol_path.curve.point_count == 0:
 		return global_position
-	var pts: Array[Dictionary] = patrol_path.curve.get_point_data_list()
-	var p: Vector3 = pts[_patrol_index % pts.size()].get("transform", Transform3D()).origin
-	if global_position.distance_to(p) < 1.0:
+	# Godot 4.3 Curve3D has no point-data list API; bake the curve into a
+	# stable waypoint array instead.
+	var pts: PackedVector3Array = patrol_path.curve.bake(16)
+	if pts.is_empty():
+		return global_position
+	var p: Vector3 = pts[_patrol_index % pts.size()]
+	if global_position.distance_to(p) < 1.5:
 		_patrol_index += 1
 	return p
 

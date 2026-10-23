@@ -39,13 +39,16 @@ func apply_all() -> void:
 		AudioServer.set_bus_volume_db(AudioServer.get_bus_index("SFX"), linear_to_db(maxf(sfx_volume, 0.0001)))
 	for a in keybinds:
 		_rebind(a)
+	# Directional-shadow distance lives on each WorldEnvironment's Environment
+	# resource (not on SceneTree); applied by levels via apply_environment().
 	match graphics_quality:
 		0:
-			get_tree().directional_shadow_max_distance = 20.0
+			set_meta("shadow_dist", 20.0)
 		1:
-			get_tree().directional_shadow_max_distance = 40.0
+			set_meta("shadow_dist", 40.0)
 		_:
-			get_tree().directional_shadow_max_distance = 60.0
+			set_meta("shadow_dist", 60.0)
+	_apply_shadow_distances()
 	settings_changed.emit()
 
 
@@ -128,3 +131,25 @@ func load_settings() -> void:
 		if keybinds.has(a) and c != 0:
 			keybinds[a] = c
 		i += 1
+
+
+func apply_environment(env: Environment) -> void:
+	## Levels call this so quality settings touch the real Environment resource.
+	if env == null:
+		return
+	env.directional_shadow_max_distance = float(get_meta("shadow_dist", 40.0))
+
+
+func _apply_shadow_distances() -> void:
+	var tree := Engine.get_main_loop()
+	if tree is SceneTree:
+		_apply_in(tree.current_scene)
+
+
+func _apply_in(node: Node) -> void:
+	if node == null:
+		return
+	if node is WorldEnvironment:
+		apply_environment((node as WorldEnvironment).environment)
+	for c in node.get_children():
+		_apply_in(c)

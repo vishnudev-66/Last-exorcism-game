@@ -18,25 +18,21 @@ fog_enabled = true
 fog_light_color = Color(0.07, 0.04, 0.05, 1)
 fog_density = 0.015
 
-[node name="Level1" type="Node"]
+[node name="Level1" type="Node3D"]
 
-[node name="WorldRoot" type="Node3D" parent="."]
-
-[node name="LevelBuilder" type="Node" parent="WorldRoot"]
+[node name="LevelBuilder" type="Node3D" parent="."]
 script = ExtResource("1")
 
 [node name="StoryDirector" type="Node" parent="."]
 script = ExtResource("2")
-entrance_door_path = NodePath("../WorldRoot/EntranceDoor")
 
 [node name="NetSync" type="Node" parent="."]
 script = ExtResource("3")
 
-[node name="GlobalEnv" type="WorldEnvironment" parent="WorldRoot"]
+[node name="GlobalEnv" type="WorldEnvironment" parent="."]
 environment = SubResource("env_1")
-size = Vector3(80, 12, 80)
 
-[node name="MoonLight" type="DirectionalLight3D" parent="WorldRoot"]
+[node name="MoonLight" type="DirectionalLight3D" parent="."]
 transform = Transform3D(0.9, -0.3, 0.3, 0, 0.7, 0.7, -0.3, -0.6, 0.45, 0, 10, 0)
 light_energy = 0.12
 shadow_enabled = false
