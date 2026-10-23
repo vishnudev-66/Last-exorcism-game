@@ -1,14 +1,14 @@
 extends Node
 ## NetSync - replication layer attached to the level root in multiplayer runs.
-## Uses MultiplayerSynchronizer nodes for player bodies + RPCs for events.
-## IMPORTANT (design rule): enemy AI & damage are simulated ONLY on the host
-## (server-authoritative), then broadcast. Clients never own authoritative state.
+## RPCs carry authoritative events from host to every peer. IMPORTANT design
+## rule: enemy AI & damage are simulated ONLY on the host (server-authoritative),
+## then broadcast. Clients never own authoritative state.
 
-@export var is_server := false
+var is_server := false
 
 
 func _ready() -> void:
-	is_server = multiplayer.is_server()
+	is_server = multiplayer.has_multiplayer_peer() and multiplayer.is_server()
 
 
 # --- Client -> server requests (validated server-side before applying) --------
@@ -21,7 +21,7 @@ func request_interact(target_path: NodePath) -> void:
 		return  # stale path after scene change - ignore gracefully
 	var sender := multiplayer.get_remote_sender_id()
 	var player := _player_by_peer(sender)
-	if player and node is Interactable:
+	if player != null and node.has_method("interact"):
 		node.interact(player)
 
 
@@ -40,7 +40,7 @@ func broadcast_player_state(index: int, state: String) -> void:
 	GameState.set_player_state(index, state)
 
 
-func _player_by_peer(peer_id: int) -> PlayerController:
+func _player_by_peer(peer_id: int) -> Node:
 	for p in get_tree().get_nodes_in_group("players"):
 		if p.get_multiplayer_authority() == peer_id:
 			return p

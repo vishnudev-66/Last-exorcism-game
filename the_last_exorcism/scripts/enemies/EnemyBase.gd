@@ -137,8 +137,8 @@ func _generic_navigation_step() -> void:
 	if goal == null:
 		return
 	nav_agent.target_position = goal
-	var next := nav_agent.get_next_path_position()
-	var dir := (next - global_position)
+	var next: Vector3 = nav_agent.get_next_path_position()
+	var dir: Vector3 = next - global_position
 	dir.y = 0.0
 	if dir.length_squared() < 0.04:
 		velocity.x = 0.0
@@ -173,10 +173,10 @@ func _current_goal() -> Variant:
 
 
 func _next_waypoint() -> Vector3:
-	if patrol_path == null or patrol_path.curve.get_points().size() == 0:
+	if patrol_path == null or patrol_path.curve.point_count == 0:
 		return global_position
-	var pts := patrol_path.curve.get_points()
-	var p: Vector3 = pts[_patrol_index % pts.size()].position
+	var pts: Array[Dictionary] = patrol_path.curve.get_point_data_list()
+	var p: Vector3 = pts[_patrol_index % pts.size()].get("transform", Transform3D()).origin
 	if global_position.distance_to(p) < 1.0:
 		_patrol_index += 1
 	return p

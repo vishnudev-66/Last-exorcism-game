@@ -57,7 +57,7 @@ func _ready() -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
-		var sens := 0.0022 * GameSettings.mouse_sensitivity
+		var sens: float = 0.0022 * GameSettings.mouse_sensitivity
 		rotate_y(-event.relative.x * sens)
 		camera.rotate_x(-event.relative.y * sens)
 		camera.rotation.x = clampf(camera.rotation.x, -deg_to_rad(80), deg_to_rad(70))

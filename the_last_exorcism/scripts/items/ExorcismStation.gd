@@ -48,11 +48,18 @@ func interact(player: PlayerController) -> bool:
 			if s != null and s.get("type", "") == required_item_type:
 				player.inventory.remove_one(i)
 				break
-	var ok := GameState.advance_exorcism(entity)
+	var step := GameState.next_exorcism_step(entity)
+	var ok := false
+	if step != "":
+		ok = GameState.advance_exorcism(entity, step)
+		if not ok:
+			player.show_message("Not yet - the rite demands another order. (next: %s)" % step)
+			AudioDirector.interact_fail()
+			return false
 	if ok:
 		AudioDirector.exorcism_chime()
 		player.show_message("A verse burns itself into the floor. The room listens.")
-	if ex["complete"]:
+	if GameState.exorcism_done(entity):
 		_complete(entity, player)
 	return true
 

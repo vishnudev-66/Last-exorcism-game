@@ -53,8 +53,7 @@ func _build_ui() -> void:
 	var xh := ColorRect.new()
 	xh.color = Color(0.9, 0.9, 0.9, 0.6)
 	xh.size = Vector2(3, 3)
-	var vp := get_viewport()
-xh.position = Vector2(vp.get_visible_rect().size.x / 2.0 - 1.5, vp.get_visible_rect().size.y / 2.0 - 1.5)
+	xh.position = Vector2(638, 358)
 	root.add_child(xh)
 
 	inv_panel = PanelContainer.new()
