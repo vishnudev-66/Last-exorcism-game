@@ -141,7 +141,8 @@ func _generic_navigation_step() -> void:
 	var dir := (next - global_position)
 	dir.y = 0.0
 	if dir.length_squared() < 0.04:
-		velocity.x = velocity.z = 0.0
+		velocity.x = 0.0
+		velocity.z = 0.0
 	else:
 		dir = dir.normalized()
 		var spd := move_speed_patrol
@@ -172,9 +173,9 @@ func _current_goal() -> Variant:
 
 
 func _next_waypoint() -> Vector3:
-	if patrol_path == null or patrol_path.curve.points.size() == 0:
+	if patrol_path == null or patrol_path.curve.get_points().size() == 0:
 		return global_position
-	var pts := patrol_path.curve.points
+	var pts := patrol_path.curve.get_points()
 	var p: Vector3 = pts[_patrol_index % pts.size()].position
 	if global_position.distance_to(p) < 1.0:
 		_patrol_index += 1

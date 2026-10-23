@@ -8,7 +8,7 @@ var _env := AudioEnvironment.new()
 
 class AudioEnvironment extends RefCounted:
 	var players: Array[AudioStreamPlayer] = []
-	var pool_size := 6
+	const POOL_SIZE := 6
 
 
 func _ready() -> void:
@@ -18,7 +18,7 @@ func _ready() -> void:
 	if AudioServer.get_bus_index("Music") < 0:
 		_add_bus("Music")
 	# Pre-create a small player pool for one-shots.
-	for i in AudioEnvironment.pool_size:
+	for i in AudioEnvironment.POOL_SIZE:
 		var p := AudioStreamPlayer.new()
 		p.bus = "SFX"
 		add_child(p)

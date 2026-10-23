@@ -7,7 +7,7 @@ const PORT := 24570
 
 enum Status { OFFLINE, HOSTING, JOINED }
 var status: Status = Status.OFFLINE
-var peer := MultiplayerPeer.new()
+var peer := ENetMultiplayerPeer.new()
 
 signal player_connected(id: int)
 signal player_disconnected(id: int)

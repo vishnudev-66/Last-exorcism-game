@@ -42,9 +42,13 @@ var exorcisms := {
 
 # ---- Players ----------------------------------------------------------------
 # Per-slot status used by UI + ghost system. States: alive / downed / ghost / left
-var players := []
-for _i in MAX_PLAYERS:
-	players.append({"name": "", "state": "alive", "health": 100.0})
+var players: Array = []
+
+func _init() -> void:
+	# Top-level `for` loops are illegal in a GDScript class body; build the
+	# player slots in the constructor instead.
+	for _i in MAX_PLAYERS:
+		players.append({"name": "", "state": "alive", "health": 100.0})
 
 # ---- Puzzle flags (persisted by SaveSystem) ---------------------------------
 var puzzle_flags := {}   # e.g. {"kitchen_circuit_repaired": true}

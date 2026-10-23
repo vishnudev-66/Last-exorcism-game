@@ -11,7 +11,7 @@ func _ready() -> void:
 	layer = 20
 	add_to_group("pause_menu")
 	panel = PanelContainer.new()
-	panel.set_anchors_preset(PRESET_FULL_RECT)
+	panel.set_anchors_preset(Control.PRESET_FULL_RECT)
 	panel.visible = false
 	add_child(panel)
 	var box := VBoxContainer.new()

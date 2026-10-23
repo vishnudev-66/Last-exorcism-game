@@ -13,14 +13,14 @@ func _ready() -> void:
 
 
 func _build() -> void:
-	set_anchors_preset(PRESET_FULL_RECT)
+	set_anchors_preset(Control.PRESET_FULL_RECT)
 	var bg := ColorRect.new()
 	bg.color = Color(0.045, 0.02, 0.02)
-	bg.set_anchors_preset(PRESET_FULL_RECT)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
 
 	var center := CenterContainer.new()
-	center.set_anchors_preset(PRESET_FULL_RECT)
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(center)
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 14)

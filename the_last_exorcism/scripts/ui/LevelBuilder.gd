@@ -120,13 +120,12 @@ i += 3
 return out
 
 
-class FlickerLightScript:
-extends Node
-## Dim ambient flicker; honours the "reduce flashing" accessibility setting.
-func _process(t: float) -> void:
-var f := GameSettings.flicker_amount()
-var base := 0.25
-get_parent().light_energy = base * (1.0 - 0.5 * f * (sin(t * 13.0) > 0.92 or randf() < 0.01 * f))
+class FlickerLightScript extends Node:
+	## Dim ambient flicker; honours the "reduce flashing" accessibility setting.
+	func _process(t: float) -> void:
+		var f := GameSettings.flicker_amount()
+		var base := 0.25
+		get_parent().light_energy = base * (1.0 - 0.5 * f * (sin(t * 13.0) > 0.92 or randf() < 0.01 * f))
 
 
 # ---- Geometry helpers ----------------------------------------------------------

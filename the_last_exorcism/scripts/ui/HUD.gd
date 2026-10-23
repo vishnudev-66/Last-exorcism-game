@@ -36,11 +36,11 @@ func _build_ui() -> void:
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
 
-	prompt_label = _label(root, Vector2(0, -70), PRESET_BOTTOM_LEFT)
+	prompt_label = _label(root, Vector2(0, -70), Control.PRESET_BOTTOM_LEFT)
 	prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	message_label = _label(root, Vector2(0, -110), PRESET_BOTTOM_LEFT)
-	objective_label = _label(root, Vector2(0, 12), PRESET_TOP_LEFT)
-	subtitle_label = _label(root, Vector2(0, 60), PRESET_BOTTOM_WIDE)
+	message_label = _label(root, Vector2(0, -110), Control.PRESET_BOTTOM_LEFT)
+	objective_label = _label(root, Vector2(0, 12), Control.PRESET_TOP_LEFT)
+	subtitle_label = _label(root, Vector2(0, 60), Control.PRESET_BOTTOM_WIDE)
 	subtitle_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 
 	health_bar = _bar(root, Vector2(16, 16), Color(0.55, 0.08, 0.08), "Health")
@@ -53,11 +53,12 @@ func _build_ui() -> void:
 	var xh := ColorRect.new()
 	xh.color = Color(0.9, 0.9, 0.9, 0.6)
 	xh.size = Vector2(3, 3)
-	xh.position = Vector2(get_viewport_rect().size.x / 2 - 1.5, get_viewport_rect().size.y / 2 - 1.5)
+	var vp := get_viewport()
+xh.position = Vector2(vp.get_visible_rect().size.x / 2.0 - 1.5, vp.get_visible_rect().size.y / 2.0 - 1.5)
 	root.add_child(xh)
 
 	inv_panel = PanelContainer.new()
-	inv_panel.set_anchors_preset(PRESET_TOP_RIGHT)
+	inv_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	inv_panel.position = Vector2(-220, 12)
 	inv_grid = GridContainer.new()
 	inv_grid.columns = 4
@@ -95,7 +96,7 @@ func _bar(parent: Control, pos: Vector2, color: Color, _name: String) -> Progres
 
 func _overlay_panel(title: String) -> PanelContainer:
 	var p := PanelContainer.new()
-	p.set_anchors_preset(PRESET_FULL_RECT)
+	p.set_anchors_preset(Control.PRESET_FULL_RECT)
 	p.visible = false
 	var box := VBoxContainer.new()
 	box.name = "Box"
