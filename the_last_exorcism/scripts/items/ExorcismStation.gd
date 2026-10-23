@@ -20,14 +20,14 @@ func _ready() -> void:
 
 
 func get_prompt(_player: PlayerController) -> String:
-	var ex = GameState.exorcisms[entity]
+	var ex: Dictionary = GameState.exorcisms[entity]
 	return "Perform rite (%d/%d)" % [ex["progress"], ex["steps"].size()]
 
 
 func interact(player: PlayerController) -> bool:
 	if not can_interact(player):
 		return false
-	var ex = GameState.exorcisms.get(entity)
+	var ex: Dictionary = GameState.exorcisms.get(entity)
 	if ex == null or ex["complete"]:
 		player.show_message("This place is quiet now.")
 		return false
@@ -44,15 +44,22 @@ func interact(player: PlayerController) -> bool:
 	if required_item_type != "":
 		# consume one stack unit
 		for i in player.inventory.slots.size():
-			var s = player.inventory.slots[i]
+			var s: Dictionary = player.inventory.slots[i]
 			if s != null and s.get("type", "") == required_item_type:
 				player.inventory.remove_one(i)
 				break
-	var ok := GameState.advance_exorcism(entity)
+	var step := GameState.next_exorcism_step(entity)
+	var ok := false
+	if step != "":
+		ok = GameState.advance_exorcism(entity, step)
+		if not ok:
+			player.show_message("Not yet - the rite demands another order. (next: %s)" % step)
+			AudioDirector.interact_fail()
+			return false
 	if ok:
 		AudioDirector.exorcism_chime()
 		player.show_message("A verse burns itself into the floor. The room listens.")
-	if ex["complete"]:
+	if GameState.exorcism_done(entity):
 		_complete(entity, player)
 	return true
 

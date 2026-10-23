@@ -1,131 +1,203 @@
 extends Node
-## GameState autoload - single source of truth for story/objective/puzzle state.
-## In multiplayer this node is server-authoritative; clients request changes via RPC
-## (see scripts/net/ for the synchronization layer added in Phase 8).
+## GameState (autoload) - server-authoritative story/session state (sec 10).
+## Objectives registry, clues/journal, three exorcism step-machines, per-player
+## states, shared spiritual energy, ending computation A/B/C/D (sec 12).
 
-signal objective_updated(id: String, done: bool)
-signal clue_discovered(clue_id: String)
-signal exorcism_progressed(entity: String, step: int)
-signal level_advanced(level: int)
-signal player_state_changed(index: int, state: String)
-signal ending_ready(ending: String)
+enum PlayerState { ALIVE, DOWNED, GHOST, LEFT }
 
-enum Level { MENU, L1_SEALED_ENTRANCE, L2_SERVANTS, L3_KITCHEN, L4_BEDROOM,
-	L5_NURSERY, L6_LIBRARY, L7_CHAPEL, L8_BASEMENT, L9_CATACOMBS,
-	L10_FINAL_EXORCISM, L11_LAST_DOOR }
+signal objective_updated(id, done)
+signal clue_added(clue_id, text)
+signal player_state_changed(index, new_state)
+signal exorcism_progressed(entity_id, step)
+signal spirit_changed(value)
 
-const MAX_PLAYERS := 10  # prototype ships tuned for 5; architecture allows 10
+var difficulty := 1.0
 
-# ---- Objectives -------------------------------------------------------------
+## Objective registry: id -> {text, done}. Completed ids flip done=true.
 var objectives := {
-	"l1_flashlight": {"text": "Find the flashlight in the entrance hall", "done": false},
-	"l1_door": {"text": "Unlock the servants' corridor door", "done": false},
-	"l2_butcher_key": {"text": "Recover the iron key from the servants' quarters", "done": false},
-	"l3_holy_water": {"text": "Prepare holy water and salt for the Butcher ritual", "done": false},
-	"l3_exorcism": {"text": "Perform the first exorcism in the kitchen", "done": false},
+	"l1_flashlight": {"text": "Find the flashlight in the entrance hall.", "done": false},
+	"l1_door": {"text": "Unlock the hallway door and go deeper.", "done": false},
+	"l3_exorcism": {"text": "Complete the Butcher's exorcism at the ritual circle.", "done": false},
 }
 
-# ---- Clues / journal --------------------------------------------------------
-var clues := {}          # clue_id -> discovered text
-var journal_entries := []
-
-# ---- Exorcisms --------------------------------------------------------------
-# Each entity has ordered ritual steps; completing them out of order fails safely.
 var exorcisms := {
-	"butcher": {"steps": ["identify_name", "gather_weakness", "draw_circle", "banish"],
-				"progress": 0, "complete": false},
-	"bride": {"steps": ["recover_relic", "arrange_candles", "reconstruct_night", "banish"],
-			  "progress": 0, "complete": false},
-	"hollow_king": {"steps": ["artifacts_1", "artifacts_2", "artifacts_3", "read_original_ritual", "banish"],
-					"progress": 0, "complete": false},
+	"butcher": {"name": "The Butcher", "steps": ["identify_identity", "gather_holy_water", "prepare_salt_circle", "speak_rite"], "done": 0},
+	"bride": {"name": "The Weeping Bride", "steps": ["recover_wedding_relic", "arrange_candles", "reconstruct_final_night", "speak_rite"], "done": 0},
+	"hollow_king": {"name": "The Hollow King", "steps": ["recover_artifact_1", "recover_artifact_2", "recover_artifact_3", "read_original_rite", "speak_rite"], "done": 0},
 }
 
-# ---- Players ----------------------------------------------------------------
-# Per-slot status used by UI + ghost system. States: alive / downed / ghost / left
-var players := []
-for _i in MAX_PLAYERS:
-	players.append({"name": "", "state": "alive", "health": 100.0})
+var clues := {}              # clue_id -> text
+var current_objective := ""
 
-# ---- Puzzle flags (persisted by SaveSystem) ---------------------------------
-var puzzle_flags := {}   # e.g. {"kitchen_circuit_repaired": true}
-var visited_levels := {}
-var current_level: int = Level.L1_SEALED_ENTRANCE
+var players: Array[Dictionary] = []
+var spirit_energy := 100.0
+var spirit_max := 100.0
 
-# ---- Ghost friend -----------------------------------------------------------
-var ghost_slot := -1                 # which player index became the ghost
-var spiritual_energy := 100.0        # shared ghost resource pool
-const GHOST_ENERGY_MAX := 100.0
-
-# ---- Ending tracking ---------------------------------------------------------
-var evidence_found := 0
-var evidence_total := 12             # set fully when mansion content lands
-var sacrifice_made := false
-var corrupted_ritual := false
+var truth_found := false
+var ritual_corrupted := false
+var sacrifice_offered := false
+var all_banished := false
 
 
-func _ready() -> void:
-	# Prototype convenience: name local slots.
-	for i in 5:
-		players[i]["name"] = "Friend %d" % (i + 1)
+func _init() -> void:
+	register_player_count(5)
+	current_objective = String(objectives["l1_flashlight"]["text"])
 
 
-func set_objective(id: String, done: bool) -> void:
-	if not objectives.has(id):
-		push_warning("Unknown objective id: " + id)
+func register_player_count(n: int) -> void:
+	players.clear()
+	for i in range(maxi(1, n)):
+		players.append({"name": "Friend %d" % (i + 1), "state": PlayerState.ALIVE, "peer_id": -1})
+
+
+## Set or complete an objective. Accepts both calling styles used across the
+## codebase: set_objective(id, done) or set_objective(free_text).
+func set_objective(id_or_text: String, done: bool = false) -> void:
+	if objectives.has(id_or_text):
+		objectives[id_or_text]["done"] = done or true
+		current_objective = String(objectives[id_or_text]["text"])
+	else:
+		# free-form text: register it dynamically
+		var nid := "obj_%d" % objectives.size()
+		objectives[nid] = {"text": id_or_text, "done": done}
+		current_objective = id_or_text
+	objective_updated.emit(id_or_text, done)
+
+
+func discover_clue(cid: String, text: String) -> void:
+	if clues.has(cid):
 		return
-	objectives[id]["done"] = done
-	objective_updated.emit(id, done)
+	clues[cid] = text
+	clue_added.emit(cid, text)
 
 
-func discover_clue(clue_id: String, text: String) -> void:
-	if clues.has(clue_id):
-		return  # already found - prevents duplicate journal spam
-	clues[clue_id] = text
-	journal_entries.append({"id": clue_id, "text": text})
-	evidence_found += 1
-	clue_discovered.emit(clue_id)
+func add_clue(cid: String, title: String, body: String) -> void:
+	discover_clue(cid, title + " - " + body)
 
 
-func advance_exorcism(entity: String) -> bool:
-	var ex = exorcisms.get(entity)
-	if ex == null or ex["complete"]:
+func journal_text() -> String:
+	var t := "== EXORCISM BOOK ==\n\n"
+	for eid in exorcisms:
+		var d: Dictionary = exorcisms[eid]
+		t += "--- %s (%d/%d) ---\n" % [d["name"], d["done"], (d["steps"] as Array).size()]
+		var steps: Array = d["steps"]
+		for i in steps.size():
+			t += ("  [x] " if i < int(d["done"]) else "  [ ] ") + String(steps[i]) + "\n"
+	t += "\n== CLUES ==\n"
+	for cid in clues:
+		t += "- " + String(clues[cid]) + "\n"
+	return t
+
+
+func advance_exorcism(eid: String, step: String) -> bool:
+	if not exorcisms.has(eid):
 		return false
-	ex["progress"] += 1
-	exorcism_progressed.emit(entity, ex["progress"])
-	if ex["progress"] >= ex["steps"].size():
-		ex["complete"] = true
+	var d: Dictionary = exorcisms[eid]
+	var steps: Array = d["steps"]
+	if int(d["done"]) >= steps.size():
+		return false
+	if steps[int(d["done"])] != step:
+		return false  # strict ordering; caller shows a hint instead
+	d["done"] = int(d["done"]) + 1
+	exorcism_progressed.emit(eid, d["done"])
+	if d["done"] == steps.size():
+		check_all_banished()
 	return true
 
 
-func set_player_state(index: int, state: String) -> void:
+func next_exorcism_step(eid: String) -> String:
+	if not exorcisms.has(eid):
+		return ""
+	var d: Dictionary = exorcisms[eid]
+	var steps: Array = d["steps"]
+	if int(d["done"]) >= steps.size():
+		return ""
+	return String(steps[int(d["done"])])
+
+
+func exorcism_done(eid: String) -> bool:
+	var d: Dictionary = exorcisms[eid]
+	return int(d["done"]) >= (d["steps"] as Array).size()
+
+
+func check_all_banished() -> void:
+	all_banished = exorcism_done("butcher") and exorcism_done("bride") and exorcism_done("hollow_king")
+
+
+## State may be passed as string ("alive"/"downed"/"ghost"/"left") or enum int.
+func set_player_state(index: int, st) -> void:
 	if index < 0 or index >= players.size():
 		return
-	players[index]["state"] = state
-	if state == "ghost":
-		ghost_slot = index
-	player_state_changed.emit(index, state)
+	var code := _state_code(st)
+	players[index]["state"] = code
+	player_state_changed.emit(index, code)
 
 
-func living_count() -> int:
-	var n := 0
+func _state_code(st) -> int:
+	if st is String:
+		match st:
+			"alive": return PlayerState.ALIVE
+			"downed": return PlayerState.DOWNED
+			"ghost": return PlayerState.GHOST
+			"left": return PlayerState.LEFT
+		return PlayerState.ALIVE
+	return int(st)
+
+
+func alive_count() -> int:
+	var c := 0
 	for p in players:
-		if p["state"] == "alive" or p["state"] == "downed":
-			n += 1
-	return n
+		if int(p["state"]) == PlayerState.ALIVE:
+			c += 1
+	return c
 
 
+func ghost_count() -> int:
+	var c := 0
+	for p in players:
+		if int(p["state"]) == PlayerState.GHOST:
+			c += 1
+	return c
+
+
+func spend_spirit(amount: float) -> bool:
+	if spirit_energy < amount:
+		return false
+	spirit_energy -= amount
+	spirit_changed.emit(spirit_energy)
+	return true
+
+
+func regen_spirit(dt: float) -> void:
+	if spirit_energy < spirit_max:
+		spirit_energy = minf(spirit_max, spirit_energy + dt * 2.0)
+		spirit_changed.emit(spirit_energy)
+
+
+## Ending decision (sec 12). Evaluated at the final door.
 func compute_ending() -> String:
-	## Endings depend on actual play: see docs/STORY.md.
-	var all_banished: bool = exorcisms["butcher"]["complete"] \
-		and exorcisms["bride"]["complete"] and exorcisms["hollow_king"]["complete"]
-	if all_banished and evidence_found >= evidence_total * 0.8 and not corrupted_ritual:
-		return "A_FRIENDSHIP"
-	if corrupted_ritual:
-		return "D_HOLLOW_SUCCESSOR"
-	if sacrifice_made:
-		return "C_SACRIFICE"
-	return "B_FORGOTTEN"
+	if all_banished and ritual_corrupted:
+		return "D"
+	if not all_banished:
+		return "B"
+	if sacrifice_offered:
+		return "C"
+	if truth_found and clues.size() >= 6:
+		return "A"
+	return "B"
 
 
-func announce_ending() -> void:
-	ending_ready.emit(compute_ending())
+func reset_run() -> void:
+	difficulty = 1.0
+	for eid in exorcisms:
+		exorcisms[eid]["done"] = 0
+	clues.clear()
+	for oid in ["l1_flashlight", "l1_door", "l3_exorcism"]:
+		if objectives.has(oid):
+			objectives[oid]["done"] = false
+	register_player_count(5)
+	spirit_energy = spirit_max
+	truth_found = false
+	ritual_corrupted = false
+	sacrifice_offered = false
+	all_banished = false

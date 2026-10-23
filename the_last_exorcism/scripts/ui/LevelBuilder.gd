@@ -1,15 +1,14 @@
-extends Node
+extends Node3D
 ## LevelBuilder - procedurally constructs the Level 1 vertical slice:
 ## entrance hall -> long hallway -> locked servants' door -> side room with
-## flashlight, key and a Butcher patrol. Pure code = no binary .blend assets,
-## easy to review, and every mesh/shape is an original placeholder.
-## Collision layers: 1 world, 2 players/triggers, 4 enemies.
+## flashlight, key and a Butcher patrol. Pure code = no binary assets, easy to
+## review, and every mesh/shape is an original placeholder.
+## Collision layers: 1 world, 2 players/triggers, 4 enemies, 8 interact areas.
 
 const WALL_H := 3.4
 const HALL_LEN := 26.0
 const HALL_W := 3.4
 
-var _mat_floor: StandardMaterial3D
 var _mat_wall: StandardMaterial3D
 var _mat_door: StandardMaterial3D
 var _mat_item: StandardMaterial3D
@@ -19,244 +18,302 @@ func _ready() -> void:
 	_make_materials()
 	_build_world()
 	_spawn_player()
+	# Props + butcher wait one frame so the World StaticBody exists in the
+	# physics server (doors/pickups raycast against it immediately after).
+	await get_tree().physics_frame
 	_spawn_props()
 	_spawn_butcher()
 
 
 func _make_materials() -> void:
-	_mat_floor = StandardMaterial3D.new()
-	_mat_floor.albedo_color = Color(0.16, 0.12, 0.1)
-	_mat_floor.roughness = 0.9
 	_mat_wall = StandardMaterial3D.new()
 	_mat_wall.albedo_color = Color(0.22, 0.17, 0.15)
 	_mat_wall.roughness = 0.85
 	_mat_door = StandardMaterial3D.new()
 	_mat_door.albedo_color = Color(0.3, 0.12, 0.1)
+	_mat_door.roughness = 0.7
 	_mat_item = StandardMaterial3D.new()
 	_mat_item.albedo_color = Color(0.8, 0.75, 0.5)
 	_mat_item.emission = Color(0.5, 0.45, 0.2)
 	_mat_item.emission_enabled = true
 
 
+func hall_end_z() -> float:
+	return 8.0 + HALL_LEN
+
+
 func _build_world() -> void:
-var parent := get_parent()
-var hall_end := 8.0 + HALL_LEN
-var world := StaticBody3D.new()
-world.name = "World"
-world.collision_layer = 1
-world.collision_mask = 0
-parent.add_child(world)
-var collider := CollisionShape3D.new()
-world.add_child(collider)
-var shape := ConcavePolygonShape3D.new()
-collider.shape = shape
-var faces := PackedVector3Array()
+	var hall_end := hall_end_z()
+	var world := StaticBody3D.new()
+	world.name = "World"
+	world.collision_layer = 1
+	world.collision_mask = 0
+	add_child(world)
+	var collider := CollisionShape3D.new()
+	world.add_child(collider)
+	var shape := ConcavePolygonShape3D.new()
+	collider.shape = shape
+	var faces := PackedVector3Array()
 
-# --- Entrance hall (x:-5..5, z:0..8); north wall has a doorway at x:-1..1
-_add_room_with_gaps(faces, Vector3(-5, 0, 0), Vector3(5, WALL_H, 8),
-{"north": [[-1.0, 1.0]]})
-# --- Main hallway (x:-1.7..1.7, z:8..hall_end); south gap already shared;
-# east wall opens into side room between z = hall_end-6 .. hall_end-4
-_add_hallway(faces, hall_end)
-# --- Side room (x:1.7..9, z:hall_end-8..hall_end); west wall doorway cut
-_add_side_room(faces, hall_end)
+	# --- Entrance hall (x:-5..5, z:0..8); north wall has a doorway at x:-1..1
+	_add_room_with_gaps(faces, Vector3(-5, 0, 0), Vector3(5, WALL_H, 8),
+		{"north": [[-1.0, 1.0]]})
+	# --- Main hallway (x:-1.7..1.7, z:8..hall_end); east wall opens into the
+	# side room between z = hall_end-6 .. hall_end-4
+	_add_hallway(faces, hall_end)
+	# --- Side room (x:1.7..9, z:hall_end-8..hall_end)
+	_add_side_room(faces, hall_end)
 
-shape.set_faces(faces)
+	shape.set_faces(faces)
 
-# Visual mesh from the same triangle soup (single draw call - cheap §16).
-var mesh_inst := MeshInstance3D.new()
-mesh_inst.name = "WorldVisual"
-var am := ArrayMesh.new()
-var arrays := []
-arrays[Mesh.ARRAY_VERTEX] = faces
-var normals := PackedVector3Array()
-for _i in faces.size():
-normals.append(Vector3.UP)  # flashlight-dominant lighting keeps this fine
-arrays[Mesh.ARRAY_NORMAL] = normals
-var uvs := PackedVector2Array()
-for i in faces.size():
-uvs.append(Vector2(faces[i].x, faces[i].z))
-arrays[Mesh.ARRAY_TEX_UV] = uvs
-am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-mesh_inst.mesh = am
-mesh_inst.material_override = _mat_wall
-world.add_child(mesh_inst)
+	# Visual mesh from the same triangle soup (single draw call - cheap §16).
+	var mesh_inst := MeshInstance3D.new()
+	mesh_inst.name = "WorldVisual"
+	var am := ArrayMesh.new()
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = faces
+	arrays[Mesh.ARRAY_NORMAL] = _face_normals(faces)
+	var uvs := PackedVector2Array()
+	for i in faces.size():
+		uvs.append(Vector2(faces[i].x + faces[i].z * 0.5, faces[i].y))
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	mesh_inst.mesh = am
+	mesh_inst.material_override = _mat_wall
+	world.add_child(mesh_inst)
 
-# Navigation region covering all walkable floors so the Butcher can path.
-var nav := NavigationRegion3D.new()
-nav.name = "NavRegion"
-var nav_mesh := NavigationMesh.new()
-# Build nav polygon from floor quads we added (first 2 tris per room).
-_build_nav(nav_mesh, hall_end)
-nav.navigation_mesh = nav_mesh
-parent.add_child(nav)
+	# Navigation region covering all walkable floors so the Butcher can path.
+	var nav := NavigationRegion3D.new()
+	nav.name = "NavRegion"
+	var nav_mesh := NavigationMesh.new()
+	_build_nav(nav_mesh, hall_end)
+	nav.navigation_mesh = nav_mesh
+	add_child(nav)
 
-# Two dim flickering lights only (limited dynamic lights §16).
-for z in [4.0, hall_end - 4.0]:
-var l := OmniLight3D.new()
-l.position = Vector3(0 if z < 10 else 5.0, WALL_H - 0.3, z)
-l.light_energy = 0.25
-l.omni_range = 7.0
-l.light_color = Color(0.9, 0.55, 0.35)
-var fl := Node.new()
-fl.set_script(FlickerLight.new())
-l.add_child(fl)
-parent.add_child(l)
+	# Two dim flickering lights only (limited dynamic lights §16).
+	for z in [4.0, hall_end - 4.0]:
+		var l := OmniLight3D.new()
+		l.position = Vector3(0.0 if z < 10.0 else 5.0, WALL_H - 0.3, z)
+		l.light_energy = 0.25
+		l.omni_range = 7.0
+		l.light_color = Color(0.9, 0.55, 0.35)
+		var fl := FlickerLightScript.new()
+		l.add_child(fl)
+		add_child(l)
 
 
+class FlickerLightScript extends Node:
+	## Dim ambient flicker; honours the "reduce flashing" accessibility setting.
+	func _process(t: float) -> void:
+		var f := GameSettings.flicker_amount()
+		var light := get_parent() as OmniLight3D
+		if light == null:
+			return
+		var spike := 1.0 if sin(t * 13.0) > 0.92 else 0.0
+		var rand_spike := 1.0 if randf() < 0.01 * f else 0.0
+		var dip := 1.0 - 0.5 * f * clampf(spike + rand_spike, 0.0, 1.0)
+		light.light_energy = 0.25 * clampf(dip, 0.05, 1.0)
+
+
+func _face_normals(faces: PackedVector3Array) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	var i := 0
+	while i + 2 < faces.size():
+		var n := (faces[i + 1] - faces[i]).cross(faces[i + 2] - faces[i])
+		if n.length_squared() < 0.0001:
+			n = Vector3.UP
+		n = n.normalized()
+		out.append(n)
+		out.append(n)
+		out.append(n)
+		i += 3
+	return out
+
+
+# ---- Geometry helpers ----------------------------------------------------------
 func _add_room_with_gaps(faces: PackedVector3Array, mn: Vector3, mx: Vector3, gaps: Dictionary) -> void:
-_floor_ceiling(faces, mn, mx)
-var t := 0.25
-_wall_seg(faces, Vector3(mn.x - t, 0, mn.z), Vector3(mn.x, mx.y, mx.z), "z", mn.z, mx.z, gaps.get("west", []), t)
-_wall_seg(faces, Vector3(mx.x, 0, mn.z), Vector3(mx.x + t, mx.y, mx.z), "z", mn.z, mx.z, gaps.get("east", []), t)
-_wall_seg(faces, Vector3(mn.x, 0, mn.z - t), Vector3(mx.x, mx.y, mn.z), "x", mn.x, mx.x, gaps.get("south", []), t)
-_wall_seg(faces, Vector3(mn.x, 0, mx.z), Vector3(mx.x, mx.y, mx.z + t), "x", mn.x, mx.x, gaps.get("north", []), t)
+	_floor_ceiling(faces, mn, mx)
+	var t := 0.25
+	_wall_seg(faces, Vector3(mn.x - t, 0, mn.z), Vector3(mn.x, mx.y, mx.z), "z", mn.z, mx.z, gaps.get("west", []))
+	_wall_seg(faces, Vector3(mx.x, 0, mn.z), Vector3(mx.x + t, mx.y, mx.z), "z", mn.z, mx.z, gaps.get("east", []))
+	_wall_seg(faces, Vector3(mn.x, 0, mn.z - t), Vector3(mx.x, mx.y, mn.z), "x", mn.x, mx.x, gaps.get("south", []))
+	_wall_seg(faces, Vector3(mn.x, 0, mx.z), Vector3(mx.x, mx.y, mx.z + t), "x", mn.x, mx.x, gaps.get("north", []))
 
 
 func _add_hallway(faces: PackedVector3Array, hall_end: float) -> void:
-var mn := Vector3(-HALL_W / 2, 0, 8.0)
-var mx := Vector3(HALL_W / 2, WALL_H, hall_end)
-_floor_ceiling(faces, mn, mx)
-var t := 0.25
-_wall_seg(faces, Vector3(mn.x - t, 0, mn.z), Vector3(mn.x, mx.y, mx.z), "z", mn.z, mx.z, [], t)
-# East wall opens toward side room: gap z = hall_end-6 .. hall_end-4
-_wall_seg(faces, Vector3(mx.x, 0, mn.z), Vector3(mx.x + t, mx.y, mx.z), "z", mn.z, mx.z,
-[[hall_end - 6.0, hall_end - 4.0]], t)
-# End wall replaced by ServantsDoor object; leave small frame boxes either side
-_wall_seg(faces, Vector3(mn.x, 0, mx.z), Vector3(mx.x, mx.y, mx.z + t), "x", mn.x, mx.x,
-[[-0.8, 0.8]], t)
+	var mn := Vector3(-HALL_W / 2.0, 0, 8.0)
+	var mx := Vector3(HALL_W / 2.0, WALL_H, hall_end)
+	_floor_ceiling(faces, mn, mx)
+	var t := 0.25
+	_wall_seg(faces, Vector3(mn.x - t, 0, mn.z), Vector3(mn.x, mx.y, mx.z), "z", mn.z, mx.z, [])
+	# East wall opens toward side room: gap z = hall_end-6 .. hall_end-4
+	_wall_seg(faces, Vector3(mx.x, 0, mn.z), Vector3(mx.x + t, mx.y, mx.z), "z", mn.z, mx.z,
+		[[hall_end - 6.0, hall_end - 4.0]])
+	# End wall replaced by ServantsDoor object; leave small frame boxes either side
+	_wall_seg(faces, Vector3(mn.x, 0, mx.z), Vector3(mx.x, mx.y, mx.z + t), "x", mn.x, mx.x,
+		[[-0.8, 0.8]])
 
 
 func _add_side_room(faces: PackedVector3Array, hall_end: float) -> void:
-var mn := Vector3(HALL_W / 2, 0, hall_end - 8.0)
-var mx := Vector3(9.0, WALL_H, hall_end)
-_floor_ceiling(faces, mn, mx)
-var t := 0.25
-# West wall shares corridor east wall; rebuild only its non-gap parts here
-_wall_seg(faces, Vector3(mn.x - t, 0, mn.z), Vector3(mn.x, mx.y, mx.z), "z", mn.z, mx.z,
-[[hall_end - 6.0, hall_end - 4.0]], t)
-_wall_seg(faces, Vector3(mx.x, 0, mn.z), Vector3(mx.x + t, mx.y, mx.z), "z", mn.z, mx.z, [], t)
-_wall_seg(faces, Vector3(mn.x, 0, mn.z - t), Vector3(mx.x, mx.y, mn.z), "x", mn.x, mx.x, [], t)
-_wall_seg(faces, Vector3(mn.x, 0, mx.z), Vector3(mx.x, mx.y, mx.z + t), "x", mn.x, mx.x, [], t)
+	var mn := Vector3(HALL_W / 2.0, 0, hall_end - 8.0)
+	var mx := Vector3(9.0, WALL_H, hall_end)
+	_floor_ceiling(faces, mn, mx)
+	var t := 0.25
+	# West wall shares corridor east wall; rebuild only its non-gap parts here
+	_wall_seg(faces, Vector3(mn.x - t, 0, mn.z), Vector3(mn.x, mx.y, mx.z), "z", mn.z, mx.z,
+		[[hall_end - 6.0, hall_end - 4.0]])
+	_wall_seg(faces, Vector3(mx.x, 0, mn.z), Vector3(mx.x + t, mx.y, mx.z), "z", mn.z, mx.z, [])
+	_wall_seg(faces, Vector3(mn.x, 0, mn.z - t), Vector3(mx.x, mx.y, mn.z), "x", mn.x, mx.x, [])
+	_wall_seg(faces, Vector3(mn.x, 0, mx.z), Vector3(mx.x, mx.y, mx.z + t), "x", mn.x, mx.x, [])
 
 
 func _floor_ceiling(faces: PackedVector3Array, mn: Vector3, mx: Vector3) -> void:
-faces.append(Vector3(mn.x, 0, mn.z)); faces.append(Vector3(mn.x, 0, mx.z)); faces.append(Vector3(mx.x, 0, mx.z))
-faces.append(Vector3(mn.x, 0, mn.z)); faces.append(Vector3(mx.x, 0, mx.z)); faces.append(Vector3(mx.x, 0, mn.z))
-faces.append(Vector3(mn.x, mx.y, mn.z)); faces.append(Vector3(mx.x, mx.y, mn.z)); faces.append(Vector3(mx.x, mx.y, mx.z))
-faces.append(Vector3(mn.x, mx.y, mn.z)); faces.append(Vector3(mx.x, mx.y, mx.z)); faces.append(Vector3(mn.x, mx.y, mx.z))
+	faces.append(Vector3(mn.x, 0, mn.z)); faces.append(Vector3(mn.x, 0, mx.z)); faces.append(Vector3(mx.x, 0, mx.z))
+	faces.append(Vector3(mn.x, 0, mn.z)); faces.append(Vector3(mx.x, 0, mx.z)); faces.append(Vector3(mx.x, 0, mn.z))
+	faces.append(Vector3(mn.x, mx.y, mn.z)); faces.append(Vector3(mx.x, mx.y, mn.z)); faces.append(Vector3(mx.x, mx.y, mx.z))
+	faces.append(Vector3(mn.x, mx.y, mn.z)); faces.append(Vector3(mx.x, mx.y, mx.z)); faces.append(Vector3(mn.x, mx.y, mx.z))
 
 
-func _build_nav(nm: NavigationMesh, hall_end: float) -> void:
-nm.cell_size = 0.25
-nm.filter_baking_aabb = AABB(Vector3(-20, -1, -5), Vector3(40, 6, 60))
-var src := NavigationMeshSourceGeometryData3D.new()
-# Bake from the collision shapes we just built (floors included).
-var world := get_parent().get_node_or_null("World")
-if world != null:
-NavigationServer3D.parse_convex_mesh(src, world.get_node("WorldVisual").mesh, Transform3D())
-nm.bake_from_source_geometry_data(src)
-
-class FlickerLight extends Node:
-	func _process(t: float) -> void:
-		var f := GameSettings.flicker_amount()
-		var base := 0.25
-		get_parent().light_energy = base * (1.0 - 0.5 * f * (sin(t * 13.0) > 0.92 or randf() < 0.01 * f))
-
-
-## Wall segment builder supporting door gaps. `axis` is the run direction;
-## `gaps` is an array of [from, to] coordinates where NO wall is built
-## (a doorway sits there instead). Lintels above gaps are omitted for
-## simplicity - dark trim reads as a doorway in low light.
 func _wall_seg(faces: PackedVector3Array, a: Vector3, b: Vector3, axis: String,
-from: float, to: float, gaps: Array, _t: float) -> void:
-var cursor := from
-for g in gaps:
-_add_box(faces, _at(axis, a, cursor), _at(axis, b, g[0]))
-cursor = g[1]
-if cursor < to:
-_add_box(faces, _at(axis, a, cursor), _at(axis, b, to))
+	from: float, to: float, gaps: Array) -> void:
+	# `gaps` is an array of [from, to] coordinates where NO wall is built
+	# (a doorway sits there instead). Lintels above gaps are omitted for
+	# simplicity - dark trim reads as a doorway in low light.
+	var cursor := from
+	for g in gaps:
+		_add_box(faces, _at(axis, a, cursor), _at(axis, b, float(g[0])))
+		cursor = float(g[1])
+	if cursor < to:
+		_add_box(faces, _at(axis, a, cursor), _at(axis, b, to))
 
 
 func _at(axis: String, v: Vector3, coord: float) -> Vector3:
-if axis == "x":
-return Vector3(coord, v.y, v.z)
-return Vector3(v.x, v.y, coord)
+	if axis == "x":
+		return Vector3(coord, v.y, v.z)
+	return Vector3(v.x, v.y, coord)
 
 
 func _add_box(faces: PackedVector3Array, a: Vector3, b: Vector3) -> void:
+	if b.x <= a.x or b.y <= a.y or b.z <= a.z:
+		return  # zero/negative-size segment (gap spans whole wall)
 	var p := [a, Vector3(b.x, a.y, a.z), Vector3(b.x, b.y, a.z), Vector3(a.x, b.y, a.z),
 		Vector3(a.x, a.y, b.z), Vector3(b.x, a.y, b.z), b, Vector3(a.x, b.y, b.z)]
-	var idx := [[0,1,2],[0,2,3],[4,6,5],[4,7,6],[0,4,5],[0,5,1],[3,2,6],[3,6,7],[0,3,7],[0,7,4],[1,5,6],[1,6,2]]
+	var idx := [[0, 1, 2], [0, 2, 3], [4, 6, 5], [4, 7, 6], [0, 4, 5], [0, 5, 1],
+		[3, 2, 6], [3, 6, 7], [0, 3, 7], [0, 7, 4], [1, 5, 6], [1, 6, 2]]
 	for tri in idx:
 		for k in 3:
 			faces.append(p[tri[k]])
 
 
+func _build_nav(nm: NavigationMesh, hall_end: float) -> void:
+	# Nav polygons are authored directly from the room footprints instead of
+	# voxel-baking the collision soup: deterministic, instant, and guarantees
+	# the Butcher's patrol loop stays connected through every doorway gap.
+	nm.cell_size = 0.25
+	nm.agent_radius = 0.4
+	nm.agent_height = 2.2
+	# Entrance hall
+	nm.add_polygon([Vector3(-4.6, 0.05, 0.4), Vector3(4.6, 0.05, 0.4),
+		Vector3(4.6, 0.05, 7.6), Vector3(-4.6, 0.05, 7.6)])
+	# Hallway strip continues through the hall's north doorway (x:-1..1 @ z=8)
+	nm.add_polygon([Vector3(-0.9, 0.05, 7.6), Vector3(0.9, 0.05, 7.6),
+		Vector3(1.4, 0.05, 9.0), Vector3(-1.4, 0.05, 9.0)])
+	nm.add_polygon([Vector3(-1.4, 0.05, 9.0), Vector3(1.4, 0.05, 9.0),
+		Vector3(1.4, 0.05, hall_end - 0.4), Vector3(-1.4, 0.05, hall_end - 0.4)])
+	# Corridor -> side room link through the east-wall gap (z: he-6 .. he-4)
+	nm.add_polygon([Vector3(1.4, 0.05, hall_end - 5.9), Vector3(3.0, 0.05, hall_end - 5.4),
+		Vector3(3.0, 0.05, hall_end - 4.6), Vector3(1.4, 0.05, hall_end - 4.1)])
+	# Side room
+	nm.add_polygon([Vector3(2.2, 0.05, hall_end - 7.6), Vector3(8.6, 0.05, hall_end - 7.6),
+		Vector3(8.6, 0.05, hall_end - 0.4), Vector3(2.2, 0.05, hall_end - 0.4)])
+
+
+# ---- Spawns ---------------------------------------------------------------------
 func _spawn_player() -> void:
-	var player_scene := load("res://scenes/Player.tscn")
+	# In multiplayer each machine spawns ONLY its own local player; remote
+	# peers spawn theirs and positions sync via MultiplayerSynchronizer.
+	# Single-player: exactly one player at slot 0.
+	var slot := 0
+	var nh := get_tree().root.get_node_or_null("NetHost")
+	if nh != null and int(nh.status) != 0:  # Status.OFFLINE == 0
+		slot = int(nh.get_meta("local_slot")) if nh.has_meta("local_slot") else 0
+	var player_scene := load("res://scenes/Player.tscn") as PackedScene
 	var player: PlayerController = player_scene.instantiate()
-	player.position = Vector3(0, 1.0, 2.0)
-	get_parent().add_child.call_deferred(player)
-	var hud_scene := load("res://scenes/HUD.tscn")
-	get_parent().add_child.call_deferred(hud_scene.instantiate())
-	var pause := load("res://scenes/PauseMenu.tscn")
-	get_parent().add_child.call_deferred(pause.instantiate())
+	player.player_slot = slot
+	player.name = "Player%d" % (slot + 1)
+	player.position = Vector3(-0.8 + 0.4 * slot, 1.0, 2.0)
+	add_child.call_deferred(player)
+	var hud_scene := load("res://scenes/HUD.tscn") as PackedScene
+	add_child.call_deferred(hud_scene.instantiate())
+	var pause := load("res://scenes/PauseMenu.tscn") as PackedScene
+	add_child.call_deferred(pause.instantiate())
 	# Bind HUD after both exist.
+	await get_tree().process_frame
 	await get_tree().process_frame
 	for h in get_tree().get_nodes_in_group("hud"):
 		h.bind_player(player)
 
 
 func _spawn_props() -> void:
-	var parent := get_parent()
-	# Entrance door (seals behind the group).
-	var edoor := _make_door("EntranceDoor", Vector3(0, 0, 0.0), LockType.NONE)
+	# Entrance door (the story director slams this shut behind the group).
+	var edoor := _make_door("EntranceDoor", Vector3(0, 0, 0.0), Door.LockType.NONE)
 	edoor.auto_close_after = 0.0
-	parent.add_child.call_deferred(edoor)
+	add_child(edoor)
 	# Locked servants' door at end of hallway.
-	var sdoor := _make_door("ServantsDoor", Vector3(0, 0, hall_end_z()), LockType.KEY)
+	var sdoor := _make_door("ServantsDoor", Vector3(0, 0, hall_end_z()), Door.LockType.KEY)
 	sdoor.required_key_id = "iron_key"
-	parent.add_child.call_deferred(sdoor)
-	# Flashlight on a table in entrance hall.
-	_add_interactable(load("res://scripts/items/FlashlightPickup.gd").new(),
-		Vector3(-2.5, 0.9, 4.0), Vector3(0.3, 0.05, 0.12), _mat_item, "Flashlight")
+	sdoor.opened.connect(func(_p): GameState.set_objective("l1_door", true))
+	add_child(sdoor)
+	# Flashlight on a table in the entrance hall.
+	var fl := FlashlightPickup.new()
+	fl.prompt_text = "Take the flashlight"
+	fl.one_shot = true
+	_add_interactable(fl, Vector3(-2.5, 0.9, 4.0), Vector3(0.3, 0.05, 0.12), "Flashlight")
 	# Note about the family.
-	var note := load("res://scripts/items/ClueNote.gd").new()
+	var note := ClueNote.new()
 	note.clue_id = "voss_letter"
 	note.clue_text = "\"He keeps them under the house. God forgive me, I hear them singing.\" - E. Voss"
-	_add_interactable(note, Vector3(2.5, 0.9, 3.0), Vector3(0.25, 0.02, 0.18), _mat_item, "Crumpled letter")
-	# Iron key in side room beyond... wait, key must be reachable BEFORE the
-	# locked door it opens? No - design: hallway loop gives access to side room
-	# first; the door leads onward to Level 2. Key sits in the side room.
-	var key := load("res://scripts/items/KeyPickup.gd").new()
+	note.prompt_text = "Read the crumpled letter"
+	_add_interactable(note, Vector3(2.5, 0.9, 3.0), Vector3(0.25, 0.02, 0.18), "Crumpled letter")
+	# Iron key in the side room (reachable BEFORE the locked door; that door
+	# leads onward to Level 2 - the servants' quarters).
+	var key := KeyPickup.new()
 	key.door_id = "iron_key"
 	key.key_name = "Iron Key"
-	_add_interactable(key, Vector3(6.0, 0.8, hall_end_z() - 4.0), Vector3(0.15, 0.05, 0.06), _mat_item, "Iron Key")
+	key.one_shot = true
+	key.prompt_text = "Take the iron key"
+	_add_interactable(key, Vector3(6.0, 0.8, hall_end_z() - 4.0), Vector3(0.15, 0.05, 0.06), "Iron Key")
 	# Holy water + medkit supplies in side room (Phase 2 taste).
-	var hw := load("res://scripts/items/SupplyPickup.gd").new()
-	hw.item_type = "holy_water"; hw.item_display = "Holy Water Vial"
-	_add_interactable(hw, Vector3(7.0, 0.8, hall_end_z() - 5.0), Vector3(0.1, 0.2, 0.1), _mat_item, "Holy Water")
-	var mk := load("res://scripts/items/SupplyPickup.gd").new()
-	mk.item_type = "medkit"; mk.item_display = "First-Aid Kit"; mk.stackable = false
-	_add_interactable(mk, Vector3(7.5, 0.8, hall_end_z() - 5.0), Vector3(0.2, 0.1, 0.15), _mat_item, "First-Aid Kit")
-
-
-func hall_end_z() -> float:
-	return 8.0 + HALL_LEN
-
-
-enum LockType { NONE, KEY, PUZZLE, SEAL }
+	var hw := SupplyPickup.new()
+	hw.item_type = "holy_water"
+	hw.item_display = "Holy Water Vial"
+	hw.one_shot = true
+	_add_interactable(hw, Vector3(7.0, 0.8, hall_end_z() - 5.0), Vector3(0.1, 0.2, 0.1), "Holy Water")
+	var mk := SupplyPickup.new()
+	mk.item_type = "medkit"
+	mk.item_display = "First-Aid Kit"
+	mk.stackable = false
+	mk.one_shot = true
+	_add_interactable(mk, Vector3(7.5, 0.8, hall_end_z() - 5.0), Vector3(0.2, 0.1, 0.15), "First-Aid Kit")
+	# Exorcism station near the servants' door (first rite site).
+	var st := ExorcismStation.new()
+	st.entity = "butcher"
+	st.required_item_type = "holy_water"
+	st.required_clue = "voss_letter"
+	st.prompt_text = "Kneel at the scorched circle"
+	_add_interactable(st, Vector3(0.0, 0.05, hall_end_z() - 1.6), Vector3(1.2, 0.05, 1.2), "Scorched circle")
 
 
 func _make_door(id: String, pos: Vector3, lock: int) -> Door:
 	var door := Door.new()
+	door.add_to_group("interactable")
 	door.name = id
 	door.door_id = id.to_lower()
 	door.lock_type = lock as Door.LockType
 	door.prompt_text = "Open door"
 	door.one_shot = false
-	# Geometry: Pivot holds offset panel so rotation swings around hinge.
+	# Geometry: Pivot holds offset panel so rotation swings around the hinge.
 	var pivot := Node3D.new()
 	pivot.name = "Pivot"
 	pivot.position = Vector3(-0.75, 1.2, 0)
@@ -282,24 +339,107 @@ func _make_door(id: String, pos: Vector3, lock: int) -> Door:
 	return door
 
 
-func _add_interactable(node: Node, pos: Vector3, size: Vector3, mat: Material, label: String) -> void:
+func _add_interactable(node: Node, pos: Vector3, size: Vector3, label: String) -> void:
 	node.position = pos
-	if node.has_signal("used"):
-		pass
+	node.add_to_group("interactable")
 	node.set_meta("label", label)
 	var mi := MeshInstance3D.new()
 	var box := BoxMesh.new()
 	box.size = size
 	mi.mesh = box
-	mi.material_override = mat
+	mi.material_override = _mat_item
 	node.add_child(mi)
+	# Interaction volume (layer 8): the player raycasts into this Area3D.
 	var body := Area3D.new()
-	body.collision_layer = 2
+	body.collision_layer = 8
 	body.collision_mask = 0
 	var cs := CollisionShape3D.new()
 	var bs := BoxShape3D.new()
-	bs.size = size + Vector3(0.2, 0.2, 0.2)
+	bs.size = size + Vector3(0.4, 0.4, 0.4)
 	cs.shape = bs
 	body.add_child(cs)
 	node.add_child(body)
-	get_parent().add_child.call_deferred(node)
+	add_child(node)
+
+
+# ---- ENTITY A: THE BUTCHER -----------------------------------------------------
+func _spawn_butcher() -> void:
+	var butcher := ButcherAI.new()
+	butcher.name = "Butcher"
+	butcher.position = Vector3(0, 1.2, hall_end_z() - 3.0)
+	butcher.collision_layer = 4
+	butcher.collision_mask = 1 | 2
+	butcher.enemy_name = "Butcher"
+	butcher.sight_range = 12.0
+	butcher.hearing_range = 14.0
+	butcher.move_speed_chase = 3.4
+	butcher.attack_damage = 45.0
+	butcher.protected = true   # holy water alone won't do it - ritual needed (§7)
+
+	var nav := NavigationAgent3D.new()
+	nav.name = "NavAgent"
+	nav.radius = 0.45
+	nav.height = 2.2
+	butcher.add_child(nav)
+
+	var model := Node3D.new()
+	model.name = "Model"
+	butcher.add_child(model)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.08, 0.05, 0.05)
+	mat.emission = Color(0.35, 0.03, 0.03)
+	mat.emission_enabled = true
+	var torso := MeshInstance3D.new()
+	var tm := BoxMesh.new()
+	tm.size = Vector3(0.9, 1.5, 0.6)
+	torso.mesh = tm
+	torso.position = Vector3(0, 0.2, 0)
+	torso.material_override = mat
+	model.add_child(torso)
+	var head := MeshInstance3D.new()
+	var hm := BoxMesh.new()
+	hm.size = Vector3(0.4, 0.4, 0.4)
+	head.mesh = hm
+	head.position = Vector3(0, 1.15, 0)
+	head.material_override = mat
+	model.add_child(head)
+	var apron := MeshInstance3D.new()
+	var apm := BoxMesh.new()
+	apm.size = Vector3(0.95, 0.7, 0.65)
+	apron.mesh = apm
+	apron.position = Vector3(0, -0.2, 0.05)
+	var amat := StandardMaterial3D.new()
+	amat.albedo_color = Color(0.1 + 0.35 * GameSettings.gore_intensity, 0.04, 0.04)
+	amat.metallic = 0.0
+	apron.material_override = amat
+	model.add_child(apron)
+
+	var los := RayCast3D.new()
+	los.name = "LineOfSight"
+	los.target_position = Vector3(0, 0, -butcher.sight_range)
+	los.position = Vector3(0, 1.2, 0)
+	los.collision_mask = 1 | 2   # world blocks sight; players are seen
+	los.collide_with_areas = false
+	butcher.add_child(los)
+
+	var col := CollisionShape3D.new()
+	col.name = "Collision"
+	var cap := CapsuleShape3D.new()
+	cap.radius = 0.5
+	cap.height = 2.2
+	col.shape = cap
+	col.position = Vector3(0, 0.3, 0)
+	butcher.add_child(col)
+
+	# Patrol loop: hallway <-> side room through the doorway gap.
+	var path := Path3D.new()
+	path.name = "PatrolPath"
+	var curve := Curve3D.new()
+	for p in [Vector3(0, 0, 10.0), Vector3(0, 0, hall_end_z() - 3.0),
+		Vector3(5.0, 0, hall_end_z() - 5.0), Vector3(0, 0, hall_end_z() - 3.0)]:
+		curve.add_point(p)
+	path.curve = curve
+	add_child(path)
+	butcher.patrol_path = path
+
+	add_child(butcher)

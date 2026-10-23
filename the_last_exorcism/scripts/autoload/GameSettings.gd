@@ -1,37 +1,28 @@
 extends Node
-## GameSettings autoload - accessible settings, remappable controls, quality presets.
-## Settings persist to user://settings.cfg so players keep preferences between runs.
+## GameSettings (autoload) - accessibility & performance settings (sec 3/9/16).
+## Persisted to user://settings.cfg. Works on desktop AND HTML5/Web export.
 
 signal settings_changed
 
-const SETTINGS_PATH := "user://settings.cfg"
+const CFG_PATH := "user://settings.cfg"
 
-var brightness := 1.0              # 0.5 (dark) .. 2.0 (bright) - accessibility
-var master_volume := 0.8
-var sfx_volume := 1.0
-var music_volume := 0.6
-var subtitles_enabled := true      # accessible subtitles for whispers/scares
-var gore_intensity := 1.0          # 0.0 = none, 1.0 = full
-var camera_shake := 1.0            # motion-sensitivity control
-var flash_reduction := false       # reduce strobe/flicker intensity
-var graphics_quality := 1          # 0 low / 1 medium / 2 high
+var master_volume := 0.8          # linear 0..1
+var music_volume := 0.5
+var sfx_volume := 0.8
+var brightness := 1.0             # 0.5 .. 2.0 canvas modulation
+var subtitles_enabled := true
+var gore_intensity := 1.0         # 0 none .. 1 full
+var camera_shake := 1.0           # 0 off .. 1 full
+var flash_reduction := false
+var graphics_quality := 1         # 0 low, 1 medium, 2 high
 var mouse_sensitivity := 1.0
-var vsync_enabled := true
+var invert_y := false
 
-# Remapped control names -> physical keycodes (see docs/CONTROLS.md for defaults)
+# Remapped keys: action -> physical keycode
 var keybinds := {
-	"move_forward": KEY_W,
-	"move_back": KEY_S,
-	"move_left": KEY_A,
-	"move_right": KEY_D,
-	"jump": KEY_SPACE,
-	"crouch": KEY_CTRL,
-	"interact": KEY_E,
-	"flashlight": KEY_F,
-	"sprint": KEY_SHIFT,
-	"inventory": KEY_I,
-	"journal": KEY_J,
-	"map": KEY_M,
+	"move_forward": 87, "move_back": 83, "move_left": 65, "move_right": 68,
+	"jump": 32, "crouch": 4194310, "interact": 69, "flashlight": 70,
+	"sprint": 4194325, "inventory": 73, "journal": 74, "map": 77, "pause": 4194305,
 }
 
 
@@ -41,83 +32,124 @@ func _ready() -> void:
 
 
 func apply_all() -> void:
-	_apply_keybinds()
-	_apply_volumes()
-	_apply_quality()
+	AudioServer.set_bus_volume_db(AudioServer.get_bus_index("Master"), linear_to_db(maxf(master_volume, 0.0001)))
+	if AudioServer.get_bus_index("Music") >= 0:
+		AudioServer.set_bus_volume_db(AudioServer.get_bus_index("Music"), linear_to_db(maxf(music_volume, 0.0001)))
+	if AudioServer.get_bus_index("SFX") >= 0:
+		AudioServer.set_bus_volume_db(AudioServer.get_bus_index("SFX"), linear_to_db(maxf(sfx_volume, 0.0001)))
+	for a in keybinds:
+		_rebind(a)
+	# Directional-shadow distance lives on each WorldEnvironment's Environment
+	# resource (not on SceneTree); applied by levels via apply_environment().
+	match graphics_quality:
+		0:
+			set_meta("shadow_dist", 20.0)
+		1:
+			set_meta("shadow_dist", 40.0)
+		_:
+			set_meta("shadow_dist", 60.0)
+	_apply_shadow_distances()
 	settings_changed.emit()
 
 
-func _apply_keybinds() -> void:
-	# Rebuild each InputMap action with the currently-bound physical key.
-	for action in keybinds.keys():
-		if not InputMap.has_action(action):
-			continue
-		InputMap.action_erase_events(action)
-		var ev := InputEventKey.new()
-		ev.physical_keycode = keybinds[action]
-		InputMap.action_add_event(action, ev)
-	# Mouse bindings are fixed for now (RMB use, LMB attack-block, Esc pause).
+func flicker_amount() -> float:
+	return 0.25 if flash_reduction else 1.0
 
 
-func rebind(action: String, keycode: int) -> void:
-	if keybinds.has(action):
-		keybinds[action] = keycode
-		_apply_keybinds()
-		save_settings()
-		settings_changed.emit()
+func shake_amount() -> float:
+	return camera_shake
 
 
-func _apply_volumes() -> void:
-	AudioServer.set_bus_volume_db(0, linear_to_db(master_volume))
-	var idx_sfx := AudioServer.get_bus_index("SFX")
-	var idx_music := AudioServer.get_bus_index("Music")
-	if idx_sfx >= 0:
-		AudioServer.set_bus_volume_db(idx_sfx, linear_to_db(sfx_volume))
-	if idx_music >= 0:
-		AudioServer.set_bus_volume_db(idx_music, linear_to_db(music_volume))
+func rebind(action: String, physical_keycode: int) -> void:
+	keybinds[action] = physical_keycode
+	_rebind(action)
+	save_settings()
+	settings_changed.emit()
 
 
-func _apply_quality() -> void:
-	# Shadow resolution scales with quality to protect the RTX 3050 budget.
-	var size := 1024 if graphics_quality == 0 else 2048
-	RenderingServer.directional_shadow_atlas_set_size(size, true)
+func reset_keybinds() -> void:
+	keybinds = {
+		"move_forward": 87, "move_back": 83, "move_left": 65, "move_right": 68,
+		"jump": 32, "crouch": 4194310, "interact": 69, "flashlight": 70,
+		"sprint": 4194325, "inventory": 73, "journal": 74, "map": 77, "pause": 4194305,
+	}
+	apply_all()
+	save_settings()
+
+
+func _rebind(action: String) -> void:
+	if not InputMap.has_action(action):
+		return
+	# Rebuild the action with a single physical-key binding (remapping support).
+	InputMap.erase_action(action)
+	InputMap.add_action(action)
+	var ev := InputEventKey.new()
+	ev.physical_keycode = keybinds[action]
+	InputMap.action_add_event(action, ev)
 
 
 func save_settings() -> void:
-	var cfg := ConfigFile.new()
-	cfg.set_value("general", "brightness", brightness)
-	cfg.set_value("general", "subtitles", subtitles_enabled)
-	cfg.set_value("general", "gore", gore_intensity)
-	cfg.set_value("general", "shake", camera_shake)
-	cfg.set_value("general", "no_flash", flash_reduction)
-	cfg.set_value("general", "quality", graphics_quality)
-	cfg.set_value("general", "sensitivity", mouse_sensitivity)
-	cfg.set_value("audio", "master", master_volume)
-	cfg.set_value("audio", "sfx", sfx_volume)
-	cfg.set_value("audio", "music", music_volume)
-	for action in keybinds:
-		cfg.set_value("keys", action, keybinds[action])
-	cfg.save(SETTINGS_PATH)
+	var cf := ConfigFile.new()
+	cf.set_value("s", "master", master_volume)
+	cf.set_value("s", "music", music_volume)
+	cf.set_value("s", "sfx", sfx_volume)
+	cf.set_value("s", "brightness", brightness)
+	cf.set_value("s", "subs", subtitles_enabled)
+	cf.set_value("s", "gore", gore_intensity)
+	cf.set_value("s", "shake", camera_shake)
+	cf.set_value("s", "flash", flash_reduction)
+	cf.set_value("s", "quality", graphics_quality)
+	cf.set_value("s", "sens", mouse_sensitivity)
+	cf.set_value("s", "invert", invert_y)
+	var i := 0
+	for k in keybinds:
+		cf.set_value("k", "%d_a" % i, k)
+		cf.set_value("k", "%d_c" % i, keybinds[k])
+		i += 1
+	cf.save(CFG_PATH)
 
 
 func load_settings() -> void:
-	var cfg := ConfigFile.new()
-	if cfg.load(SETTINGS_PATH) != OK:
-		return  # first run - defaults are fine
-	brightness = cfg.get_value("general", "brightness", brightness)
-	subtitles_enabled = cfg.get_value("general", "subtitles", subtitles_enabled)
-	gore_intensity = cfg.get_value("general", "gore", gore_intensity)
-	camera_shake = cfg.get_value("general", "shake", camera_shake)
-	flash_reduction = cfg.get_value("general", "no_flash", flash_reduction)
-	graphics_quality = cfg.get_value("general", "quality", graphics_quality)
-	mouse_sensitivity = cfg.get_value("general", "sensitivity", mouse_sensitivity)
-	master_volume = cfg.get_value("audio", "master", master_volume)
-	sfx_volume = cfg.get_value("audio", "sfx", sfx_volume)
-	music_volume = cfg.get_value("audio", "music", music_volume)
-	for action in keybinds.keys():
-		keybinds[action] = cfg.get_value("keys", action, keybinds[action])
+	var cf := ConfigFile.new()
+	if cf.load(CFG_PATH) != OK:
+		return
+	master_volume = float(cf.get_value("s", "master", master_volume))
+	music_volume = float(cf.get_value("s", "music", music_volume))
+	sfx_volume = float(cf.get_value("s", "sfx", sfx_volume))
+	brightness = float(cf.get_value("s", "brightness", brightness))
+	subtitles_enabled = bool(cf.get_value("s", "subs", subtitles_enabled))
+	gore_intensity = float(cf.get_value("s", "gore", gore_intensity))
+	camera_shake = float(cf.get_value("s", "shake", camera_shake))
+	flash_reduction = bool(cf.get_value("s", "flash", flash_reduction))
+	graphics_quality = int(cf.get_value("s", "quality", graphics_quality))
+	mouse_sensitivity = float(cf.get_value("s", "sens", mouse_sensitivity))
+	invert_y = bool(cf.get_value("s", "invert", invert_y))
+	var i := 0
+	while cf.has_value("k", "%d_a" % i):
+		var a := String(cf.get_value("k", "%d_a" % i, ""))
+		var c := int(cf.get_value("k", "%d_c" % i, 0))
+		if keybinds.has(a) and c != 0:
+			keybinds[a] = c
+		i += 1
 
 
-## Effective flicker strength after accessibility filters.
-func flicker_amount() -> float:
-	return 0.15 if flash_reduction else 1.0
+func apply_environment(env: Environment) -> void:
+	## Levels call this so quality settings touch the real Environment resource.
+	if env == null:
+		return
+	env.directional_shadow_max_distance = float(get_meta("shadow_dist", 40.0))
+
+
+func _apply_shadow_distances() -> void:
+	var tree := Engine.get_main_loop()
+	if tree is SceneTree:
+		_apply_in(tree.current_scene)
+
+
+func _apply_in(node: Node) -> void:
+	if node == null:
+		return
+	if node is WorldEnvironment:
+		apply_environment((node as WorldEnvironment).environment)
+	for c in node.get_children():
+		_apply_in(c)
