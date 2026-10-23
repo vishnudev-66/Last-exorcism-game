@@ -15,12 +15,14 @@ signal connection_failed(reason: String)
 
 
 func host_game(max_players := 5) -> Error:
+	peer = ENetMultiplayerPeer.new()
 	var err := peer.create_server(PORT, max_players)
 	if err != OK:
 		connection_failed.emit("Port %d in use or unavailable." % PORT)
 		return err
 	multiplayer.multiplayer_peer = peer
 	status = Status.HOSTING
+	set_meta("local_slot", 0)
 	peer.peer_connected.connect(_on_connected)
 	peer.peer_disconnected.connect(_on_disconnected)
 	print("[Net] Hosting on port ", PORT)
@@ -28,12 +30,15 @@ func host_game(max_players := 5) -> Error:
 
 
 func join_game(address: String) -> Error:
+	peer = ENetMultiplayerPeer.new()
 	var err := peer.create_client(address, PORT)
 	if err != OK:
 		connection_failed.emit("Cannot reach host at " + address)
 		return err
 	multiplayer.multiplayer_peer = peer
 	status = Status.JOINED
+	# Clients derive a stable local slot from their ENet peer id.
+	set_meta("local_slot", 1 + multiplayer.get_unique_id() % 4)
 	peer.peer_connected.connect(_on_connected)
 	peer.peer_disconnected.connect(_on_disconnected)
 	print("[Net] Joining ", address)

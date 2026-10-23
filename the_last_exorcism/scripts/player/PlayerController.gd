@@ -62,7 +62,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		camera.rotate_x(-event.relative.y * sens)
 		camera.rotation.x = clampf(camera.rotation.x, -deg_to_rad(80), deg_to_rad(70))
 	elif event.is_action_pressed("pause"):
-		PauseMenu.toggle()
+		_toggle_pause_menu()
 	elif event.is_action_pressed("interact"):
 		_try_interact()
 	elif event.is_action_pressed("flashlight"):
@@ -70,11 +70,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("use_item"):
 		use_selected_item()
 	elif event.is_action_pressed("inventory"):
-		HUD.toggle_inventory()
+		get_tree().call_group("hud", "toggle_inventory")
 	elif event.is_action_pressed("journal"):
-		HUD.toggle_journal()
+		get_tree().call_group("hud", "toggle_journal")
 	elif event.is_action_pressed("map"):
-		HUD.toggle_map()
+		get_tree().call_group("hud", "toggle_map")
 
 
 func _physics_process(delta: float) -> void:
@@ -267,7 +267,7 @@ func use_selected_item() -> void:
 				inventory.remove_one(inventory.selected_index)
 				show_message("You patch your wounds.")
 		"book":
-			HUD.toggle_journal()
+			get_tree().call_group("hud", "toggle_journal")
 		_:
 			show_message("Not usable here.")
 
@@ -281,6 +281,11 @@ func throw_holy_water(item: Dictionary) -> void:
 			if origin.distance_to(e.global_position) < 6.0:
 				e.on_holy_water_hit()
 	show_message("The vial bursts in a spray of salt and light.")
+
+
+func _toggle_pause_menu() -> void:
+	for m in get_tree().get_nodes_in_group("pause_menu"):
+		m._toggle_impl()
 
 
 func show_message(text: String) -> void:
